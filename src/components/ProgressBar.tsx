@@ -5,15 +5,19 @@ interface ProgressBarProps {
 }
 
 const stages = [
+  "Your background",
+  "Your location",
+  "Your school",
   "Exam timeline",
-  "R&W target score",
-  "Math target score",
+  "R&W target",
+  "Math target",
+  "Study schedule",
   "All set!",
 ];
 
 export default function ProgressBar({ progress }: ProgressBarProps) {
   const stageIndex = Math.min(
-    Math.floor(progress / 34),
+    Math.floor(progress / (100 / (stages.length - 1))),
     stages.length - 1
   );
 

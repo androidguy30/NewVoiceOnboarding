@@ -14,6 +14,14 @@ import {
   COMPLETION_MESSAGE,
 } from "@/lib/onboarding-steps";
 
+/**
+ * For "chips-then-text" steps, we go through two sub-phases:
+ *  1. "chips" — show the chip options (e.g. "Within US" / "Outside US")
+ *  2. "text"  — after chip selection, show a text field for details
+ * The final stored value combines both: "Within US — New York, NY"
+ */
+type SubPhase = "chips" | "text";
+
 export default function OnboardingPage() {
   const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -23,6 +31,10 @@ export default function OnboardingPage() {
   const [isComplete, setIsComplete] = useState(false);
   const [started, setStarted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // For chips-then-text steps
+  const [subPhase, setSubPhase] = useState<SubPhase>("chips");
+  const [chipSelection, setChipSelection] = useState("");
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -54,6 +66,18 @@ export default function OnboardingPage() {
     []
   );
 
+  const addUserMessage = (content: string) => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: uuidv4(),
+        role: "user",
+        content,
+        timestamp: new Date(),
+      },
+    ]);
+  };
+
   // Initial greeting
   useEffect(() => {
     if (started) return;
@@ -61,7 +85,6 @@ export default function OnboardingPage() {
 
     const init = async () => {
       await addAssistantMessage(WELCOME_MESSAGE);
-      // Ask the first question after a short pause
       await addAssistantMessage(onboardingSteps[0].question);
     };
     init();
@@ -71,51 +94,85 @@ export default function OnboardingPage() {
     (currentStep / onboardingSteps.length) * 100
   );
 
-  const handleSelect = async (option: string) => {
-    const step = onboardingSteps[currentStep];
-
-    // Add user's selection as a chat bubble
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: uuidv4(),
-        role: "user",
-        content: option,
-        timestamp: new Date(),
-      },
-    ]);
-
-    // Save to profile
-    const updatedProfile = { ...profile, [step.id]: option };
-    setProfile(updatedProfile);
-
-    // Show assistant acknowledgment
-    await addAssistantMessage(step.responseTemplate(option));
+  const advanceToNextStep = async (
+    updatedProfile: Partial<SATProfile>,
+    responseText: string
+  ) => {
+    await addAssistantMessage(responseText);
 
     const nextStep = currentStep + 1;
 
     if (nextStep < onboardingSteps.length) {
-      // Ask next question
       setCurrentStep(nextStep);
+      setSubPhase("chips");
+      setChipSelection("");
       await addAssistantMessage(onboardingSteps[nextStep].question);
     } else {
-      // Onboarding complete
       setCurrentStep(nextStep);
       setIsComplete(true);
       const finalProfile = updatedProfile as SATProfile;
       await addAssistantMessage(COMPLETION_MESSAGE(finalProfile));
 
-      // Save and navigate
       localStorage.setItem("satProfile", JSON.stringify(finalProfile));
       setTimeout(() => router.push("/profile"), 2500);
     }
   };
 
-  const showChips =
-    !isComplete &&
-    !isTyping &&
-    currentStep < onboardingSteps.length &&
-    messages.length >= 2;
+  const handleSelect = async (option: string) => {
+    const step = onboardingSteps[currentStep];
+
+    if (step.inputMode === "chips-then-text" && subPhase === "chips") {
+      // First phase: user picked a chip (e.g. "Within US")
+      addUserMessage(option);
+      setChipSelection(option);
+      setSubPhase("text");
+      // Ask follow-up
+      await addAssistantMessage(
+        step.followUpPrompt ?? "Please provide more details."
+      );
+      return;
+    }
+
+    if (step.inputMode === "chips-then-text" && subPhase === "text") {
+      // Second phase: user typed details
+      addUserMessage(option);
+      const combined = `${chipSelection} — ${option}`;
+      const updatedProfile = { ...profile, [step.id]: combined };
+      setProfile(updatedProfile);
+      await advanceToNextStep(updatedProfile, step.responseTemplate(combined));
+      return;
+    }
+
+    // Standard chips or text step
+    addUserMessage(option);
+    const updatedProfile = { ...profile, [step.id]: option };
+    setProfile(updatedProfile);
+    await advanceToNextStep(updatedProfile, step.responseTemplate(option));
+  };
+
+  // Determine what input to show
+  const step = currentStep < onboardingSteps.length ? onboardingSteps[currentStep] : null;
+  const showInput = !isComplete && !isTyping && step && messages.length >= 2;
+
+  let chipOptions: string[] | undefined;
+  let showTextInput = false;
+  let textPlaceholder = "";
+
+  if (showInput && step) {
+    if (step.inputMode === "chips") {
+      chipOptions = step.options;
+    } else if (step.inputMode === "text") {
+      showTextInput = true;
+      textPlaceholder = step.textPlaceholder ?? "Type your answer...";
+    } else if (step.inputMode === "chips-then-text") {
+      if (subPhase === "chips") {
+        chipOptions = step.options;
+      } else {
+        showTextInput = true;
+        textPlaceholder = step.followUpPlaceholder ?? "Type here...";
+      }
+    }
+  }
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -162,14 +219,16 @@ export default function OnboardingPage() {
         </div>
       </div>
 
-      {/* Suggestion Chips */}
+      {/* Input Area */}
       <div className="border-t border-gray-200 bg-white">
         <div className="max-w-3xl mx-auto py-4">
-          {showChips ? (
+          {showInput ? (
             <SuggestionChips
-              options={onboardingSteps[currentStep].options}
+              options={chipOptions}
               onSelect={handleSelect}
               disabled={isTyping}
+              showTextInput={showTextInput}
+              textPlaceholder={textPlaceholder}
             />
           ) : isComplete ? (
             <p className="text-center text-sm text-gray-400 py-3">
@@ -177,7 +236,7 @@ export default function OnboardingPage() {
             </p>
           ) : (
             <p className="text-center text-sm text-gray-400 py-3">
-              Waiting...
+              &nbsp;
             </p>
           )}
         </div>
