@@ -3,32 +3,26 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
-import { ChatMessage } from "@/types/onboarding";
+import { ChatMessage, SATProfile } from "@/types/onboarding";
 import ChatBubble from "@/components/ChatBubble";
-import ChatInput from "@/components/ChatInput";
+import SuggestionChips from "@/components/SuggestionChips";
 import TypingIndicator from "@/components/TypingIndicator";
 import ProgressBar from "@/components/ProgressBar";
-
-const PROFILE_FIELDS = [
-  "name",
-  "age",
-  "learningGoals",
-  "currentSkillLevel",
-  "preferredLearningStyle",
-  "interests",
-  "priorExperience",
-  "availableTime",
-  "preferredLanguage",
-];
+import {
+  onboardingSteps,
+  WELCOME_MESSAGE,
+  COMPLETION_MESSAGE,
+} from "@/lib/onboarding-steps";
 
 export default function OnboardingPage() {
   const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [profile, setProfile] = useState<Partial<SATProfile>>({});
+  const [isTyping, setIsTyping] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [started, setStarted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const hasInitialized = useRef(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -36,205 +30,92 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isLoading]);
+  }, [messages, isTyping]);
 
-  const estimateProgress = useCallback(
-    (msgs: ChatMessage[]) => {
-      const conversationText = msgs
-        .map((m) => m.content.toLowerCase())
-        .join(" ");
-
-      let fieldsCollected = 0;
-      const checks: Record<string, () => boolean> = {
-        name: () =>
-          msgs.some(
-            (m) =>
-              m.role === "user" &&
-              msgs.indexOf(m) <= 2 &&
-              m.content.trim().split(/\s+/).length <= 4
-          ),
-        age: () =>
-          /\b(\d{1,2}\s*(years?|yrs?|y\/o)|age|old|teen|adult|student|professional|kid|child)\b/.test(
-            conversationText
-          ),
-        learningGoals: () =>
-          /\b(learn|goal|want to|interested in|improve|master|become|study|understand)\b/.test(
-            conversationText
-          ),
-        currentSkillLevel: () =>
-          /\b(beginner|intermediate|advanced|novice|expert|basic|some experience|no experience|new to)\b/.test(
-            conversationText
-          ),
-        preferredLearningStyle: () =>
-          /\b(video|reading|hands[- ]on|interactive|project|tutorial|course|practice|exercise|visual|audio)\b/.test(
-            conversationText
-          ),
-        interests: () =>
-          /\b(interested|passionate|love|enjoy|fascinate|curious|hobby|like)\b/.test(
-            conversationText
-          ),
-        priorExperience: () =>
-          /\b(experience|worked|built|background|done|tried|used|familiar|know)\b/.test(
-            conversationText
-          ),
-        availableTime: () =>
-          /\b(\d+\s*(hour|hr|min|day|week)|daily|weekly|spare time|free time|couple|few)\b/.test(
-            conversationText
-          ),
-        preferredLanguage: () =>
-          /\b(english|spanish|hindi|french|german|chinese|japanese|korean|portuguese|arabic|language)\b/.test(
-            conversationText
-          ),
-      };
-
-      for (const field of PROFILE_FIELDS) {
-        if (checks[field]?.()) {
-          fieldsCollected++;
-        }
-      }
-
-      return Math.min(
-        (fieldsCollected / PROFILE_FIELDS.length) * 100,
-        isComplete ? 100 : 95
-      );
+  const addAssistantMessage = useCallback(
+    (content: string): Promise<void> => {
+      return new Promise((resolve) => {
+        setIsTyping(true);
+        setTimeout(() => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: uuidv4(),
+              role: "assistant",
+              content,
+              timestamp: new Date(),
+            },
+          ]);
+          setIsTyping(false);
+          resolve();
+        }, 800);
+      });
     },
-    [isComplete]
+    []
   );
-
-  const sendMessage = async (
-    content: string,
-    currentMessages: ChatMessage[]
-  ) => {
-    const apiMessages = currentMessages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
-
-    if (content) {
-      apiMessages.push({ role: "user" as const, content });
-    }
-
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: apiMessages }),
-    });
-
-    if (!response.ok) {
-      throw new Error("Failed to get response");
-    }
-
-    return response.json();
-  };
 
   // Initial greeting
   useEffect(() => {
-    if (hasInitialized.current) return;
-    hasInitialized.current = true;
+    if (started) return;
+    setStarted(true);
 
-    const initChat = async () => {
-      setIsLoading(true);
-      try {
-        const data = await sendMessage("", []);
-        const assistantMessage: ChatMessage = {
-          id: uuidv4(),
-          role: "assistant",
-          content: data.message,
-          timestamp: new Date(),
-        };
-        setMessages([assistantMessage]);
-      } catch {
-        const errorMessage: ChatMessage = {
-          id: uuidv4(),
-          role: "assistant",
-          content:
-            "Hi there! Welcome to our learning platform. I'm here to help set up your personalized learning experience. What's your name?",
-          timestamp: new Date(),
-        };
-        setMessages([errorMessage]);
-      } finally {
-        setIsLoading(false);
-      }
+    const init = async () => {
+      await addAssistantMessage(WELCOME_MESSAGE);
+      // Ask the first question after a short pause
+      await addAssistantMessage(onboardingSteps[0].question);
     };
+    init();
+  }, [started, addAssistantMessage]);
 
-    initChat();
-  }, []);
+  const progress = Math.round(
+    (currentStep / onboardingSteps.length) * 100
+  );
 
-  const handleSend = async (content: string) => {
-    const userMessage: ChatMessage = {
-      id: uuidv4(),
-      role: "user",
-      content,
-      timestamp: new Date(),
-    };
+  const handleSelect = async (option: string) => {
+    const step = onboardingSteps[currentStep];
 
-    const updatedMessages = [...messages, userMessage];
-    setMessages(updatedMessages);
-    setIsLoading(true);
-
-    try {
-      const data = await sendMessage(content, messages);
-
-      const assistantMessage: ChatMessage = {
+    // Add user's selection as a chat bubble
+    setMessages((prev) => [
+      ...prev,
+      {
         id: uuidv4(),
-        role: "assistant",
-        content: data.message,
+        role: "user",
+        content: option,
         timestamp: new Date(),
-      };
+      },
+    ]);
 
-      const allMessages = [...updatedMessages, assistantMessage];
-      setMessages(allMessages);
+    // Save to profile
+    const updatedProfile = { ...profile, [step.id]: option };
+    setProfile(updatedProfile);
 
-      const newProgress = estimateProgress(allMessages);
-      setProgress(newProgress);
+    // Show assistant acknowledgment
+    await addAssistantMessage(step.responseTemplate(option));
 
-      if (data.isComplete) {
-        setIsComplete(true);
-        setProgress(100);
+    const nextStep = currentStep + 1;
 
-        // Extract profile and navigate after a short delay
-        setTimeout(() => extractAndNavigate(allMessages), 2000);
-      }
-    } catch {
-      const errorMessage: ChatMessage = {
-        id: uuidv4(),
-        role: "assistant",
-        content:
-          "I'm sorry, I had a hiccup there. Could you say that again?",
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
+    if (nextStep < onboardingSteps.length) {
+      // Ask next question
+      setCurrentStep(nextStep);
+      await addAssistantMessage(onboardingSteps[nextStep].question);
+    } else {
+      // Onboarding complete
+      setCurrentStep(nextStep);
+      setIsComplete(true);
+      const finalProfile = updatedProfile as SATProfile;
+      await addAssistantMessage(COMPLETION_MESSAGE(finalProfile));
+
+      // Save and navigate
+      localStorage.setItem("satProfile", JSON.stringify(finalProfile));
+      setTimeout(() => router.push("/profile"), 2500);
     }
   };
 
-  const extractAndNavigate = async (msgs: ChatMessage[]) => {
-    try {
-      const apiMessages = msgs.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
-
-      const response = await fetch("/api/extract-profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: apiMessages }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        localStorage.setItem(
-          "learnerProfile",
-          JSON.stringify(data.profile)
-        );
-      }
-    } catch (error) {
-      console.error("Profile extraction error:", error);
-    }
-
-    router.push("/profile");
-  };
+  const showChips =
+    !isComplete &&
+    !isTyping &&
+    currentStep < onboardingSteps.length &&
+    messages.length >= 2;
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -258,10 +139,10 @@ export default function OnboardingPage() {
           </div>
           <div>
             <h1 className="text-lg font-semibold text-gray-900">
-              Learning Profile Setup
+              SAT Prep Setup
             </h1>
             <p className="text-xs text-gray-500">
-              Let&apos;s personalize your experience
+              Let&apos;s personalize your study plan
             </p>
           </div>
         </div>
@@ -276,21 +157,31 @@ export default function OnboardingPage() {
           {messages.map((message) => (
             <ChatBubble key={message.id} message={message} />
           ))}
-          {isLoading && <TypingIndicator />}
+          {isTyping && <TypingIndicator />}
           <div ref={messagesEndRef} />
         </div>
       </div>
 
-      {/* Input */}
-      <ChatInput
-        onSend={handleSend}
-        disabled={isLoading || isComplete}
-        placeholder={
-          isComplete
-            ? "Onboarding complete! Redirecting..."
-            : "Type your message..."
-        }
-      />
+      {/* Suggestion Chips */}
+      <div className="border-t border-gray-200 bg-white">
+        <div className="max-w-3xl mx-auto py-4">
+          {showChips ? (
+            <SuggestionChips
+              options={onboardingSteps[currentStep].options}
+              onSelect={handleSelect}
+              disabled={isTyping}
+            />
+          ) : isComplete ? (
+            <p className="text-center text-sm text-gray-400 py-3">
+              Setting up your study plan...
+            </p>
+          ) : (
+            <p className="text-center text-sm text-gray-400 py-3">
+              Waiting...
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

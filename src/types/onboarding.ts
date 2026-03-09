@@ -1,13 +1,14 @@
-export interface LearnerProfile {
-  name: string;
-  age: string;
-  learningGoals: string[];
-  currentSkillLevel: string;
-  preferredLearningStyle: string;
-  interests: string[];
-  priorExperience: string;
-  availableTime: string;
-  preferredLanguage: string;
+export interface SATProfile {
+  examDate: string;
+  targetScoreRW: string;
+  targetScoreMath: string;
+}
+
+export interface OnboardingStep {
+  id: keyof SATProfile;
+  question: string;
+  options: string[];
+  responseTemplate: (selected: string) => string;
 }
 
 export interface ChatMessage {
@@ -15,11 +16,4 @@ export interface ChatMessage {
   role: "assistant" | "user";
   content: string;
   timestamp: Date;
-}
-
-export interface OnboardingState {
-  messages: ChatMessage[];
-  profile: Partial<LearnerProfile>;
-  isComplete: boolean;
-  isLoading: boolean;
 }
