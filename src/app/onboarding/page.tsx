@@ -29,7 +29,7 @@ export default function OnboardingPage() {
   const [profile, setProfile] = useState<Partial<SATProfile>>({});
   const [isTyping, setIsTyping] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
-  const [started, setStarted] = useState(false);
+  const startedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // For chips-then-text steps
@@ -78,17 +78,17 @@ export default function OnboardingPage() {
     ]);
   };
 
-  // Initial greeting
+  // Initial greeting — useRef guard prevents double-fire in React Strict Mode
   useEffect(() => {
-    if (started) return;
-    setStarted(true);
+    if (startedRef.current) return;
+    startedRef.current = true;
 
     const init = async () => {
       await addAssistantMessage(WELCOME_MESSAGE);
       await addAssistantMessage(onboardingSteps[0].question);
     };
     init();
-  }, [started, addAssistantMessage]);
+  }, [addAssistantMessage]);
 
   const progress = Math.round(
     (currentStep / onboardingSteps.length) * 100
