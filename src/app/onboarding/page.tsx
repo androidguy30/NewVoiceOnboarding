@@ -118,6 +118,24 @@ export default function OnboardingPage() {
     }
   };
 
+  const validateInput = async (
+    field: string,
+    value: string
+  ): Promise<{ valid: boolean; corrected: string; message: string }> => {
+    try {
+      const response = await fetch("/api/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ field, value }),
+      });
+      if (!response.ok) return { valid: true, corrected: value, message: "" };
+      return await response.json();
+    } catch {
+      // On network error, let the user through
+      return { valid: true, corrected: value, message: "" };
+    }
+  };
+
   const handleSelect = async (option: string) => {
     const step = onboardingSteps[currentStep];
 
@@ -126,7 +144,6 @@ export default function OnboardingPage() {
       addUserMessage(option);
       setChipSelection(option);
       setSubPhase("text");
-      // Ask follow-up
       await addAssistantMessage(
         step.followUpPrompt ?? "Please provide more details."
       );
@@ -134,8 +151,29 @@ export default function OnboardingPage() {
     }
 
     if (step.inputMode === "chips-then-text" && subPhase === "text") {
-      // Second phase: user typed details
+      // Second phase: voice/text input — validate before advancing
       addUserMessage(option);
+
+      if (step.validationField) {
+        setIsTyping(true);
+        const result = await validateInput(step.validationField, option);
+        setIsTyping(false);
+
+        if (!result.valid) {
+          await addAssistantMessage(
+            result.message || "That doesn't look right. Could you try again?"
+          );
+          return; // Stay on same step, user can re-speak
+        }
+        // Use corrected value if provided
+        const corrected = result.corrected || option;
+        const combined = `${chipSelection} — ${corrected}`;
+        const updatedProfile = { ...profile, [step.id]: combined };
+        setProfile(updatedProfile);
+        await advanceToNextStep(updatedProfile, step.responseTemplate(combined));
+        return;
+      }
+
       const combined = `${chipSelection} — ${option}`;
       const updatedProfile = { ...profile, [step.id]: combined };
       setProfile(updatedProfile);
@@ -143,7 +181,28 @@ export default function OnboardingPage() {
       return;
     }
 
-    // Standard chips or text step
+    // Text-only step (e.g. school) — validate before advancing
+    if (step.inputMode === "text" && step.validationField) {
+      addUserMessage(option);
+      setIsTyping(true);
+      const result = await validateInput(step.validationField, option);
+      setIsTyping(false);
+
+      if (!result.valid) {
+        await addAssistantMessage(
+          result.message || "That doesn't look right. Could you try again?"
+        );
+        return; // Stay on same step, user can re-speak
+      }
+
+      const corrected = result.corrected || option;
+      const updatedProfile = { ...profile, [step.id]: corrected };
+      setProfile(updatedProfile);
+      await advanceToNextStep(updatedProfile, step.responseTemplate(corrected));
+      return;
+    }
+
+    // Standard chips step — no validation needed
     addUserMessage(option);
     const updatedProfile = { ...profile, [step.id]: option };
     setProfile(updatedProfile);

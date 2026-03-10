@@ -43,18 +43,20 @@ export const onboardingSteps: OnboardingStep[] = [
     question: "Where are you located?",
     inputMode: "chips-then-text",
     options: ["Within US", "Outside US"],
-    followUpPrompt: "Please type your city and state/country.",
+    followUpPrompt: "Please say your city and state or country.",
     followUpPlaceholder: "e.g. New York, NY",
     responseTemplate: (selected) =>
       `Got it — ${selected}. Thanks for sharing!`,
+    validationField: "location",
   },
   {
     id: "school",
     question: "What school do you attend?",
     inputMode: "text",
-    textPlaceholder: "Type your school name",
+    textPlaceholder: "Say your school name",
     responseTemplate: (selected) =>
       `${selected} — awesome! Let's keep going.`,
+    validationField: "school",
   },
   {
     id: "examDate",

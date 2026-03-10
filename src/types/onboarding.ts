@@ -20,6 +20,8 @@ export interface OnboardingStep {
   followUpPrompt?: string;
   followUpPlaceholder?: string;
   responseTemplate: (selected: string) => string;
+  /** Field name to validate via /api/validate (e.g. "location", "school") */
+  validationField?: string;
 }
 
 export interface ChatMessage {
