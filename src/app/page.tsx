@@ -78,10 +78,17 @@ export default function Home() {
         </div>
 
         <button
-          onClick={() => router.push("/onboarding")}
+          onClick={() => router.push("/onboarding-cards")}
           className="w-full py-4 px-8 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-semibold text-lg hover:from-violet-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transition-all active:scale-[0.98]"
         >
           Get Started
+        </button>
+
+        <button
+          onClick={() => router.push("/onboarding")}
+          className="w-full mt-3 py-3 px-8 rounded-xl border border-gray-300 text-gray-600 font-medium text-sm hover:bg-gray-50 transition-all active:scale-[0.98]"
+        >
+          Chat-Based Setup
         </button>
 
         <p className="text-xs text-gray-400 mt-4">
