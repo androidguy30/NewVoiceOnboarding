@@ -20,6 +20,9 @@ function getSpeechRecognition(): SpeechRecognitionAny {
 
 type MicPermission = "prompt" | "granted" | "denied";
 
+// Module-level cache so denial persists across VoiceInput remounts
+let cachedMicPermission: MicPermission | null = null;
+
 export default function VoiceInput({
   onResult,
   disabled,
@@ -29,11 +32,19 @@ export default function VoiceInput({
   const [transcript, setTranscript] = useState("");
   const [interimTranscript, setInterimTranscript] = useState("");
   const [isSupported, setIsSupported] = useState<boolean | null>(null);
-  const [micPermission, setMicPermission] = useState<MicPermission>("prompt");
+  const [micPermission, setMicPermission] = useState<MicPermission>(
+    cachedMicPermission ?? "prompt"
+  );
   const [fallbackText, setFallbackText] = useState("");
-  const [showFallback, setShowFallback] = useState(false);
+  const [showSettingsHint, setShowSettingsHint] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const recognitionRef = useRef<SpeechRecognitionAny>(null);
   const hasSubmittedRef = useRef(false);
+
+  // Sync local state to module-level cache
+  useEffect(() => {
+    cachedMicPermission = micPermission;
+  }, [micPermission]);
 
   // Check support + permission on mount
   useEffect(() => {
@@ -42,6 +53,12 @@ export default function VoiceInput({
 
     if (!supported) return;
 
+    // If we already know it's denied from a previous mount, skip the query
+    if (cachedMicPermission === "denied") {
+      setMicPermission("denied");
+      return;
+    }
+
     // Check mic permission (async, best-effort)
     (async () => {
       try {
@@ -49,10 +66,18 @@ export default function VoiceInput({
           const result = await navigator.permissions.query({
             name: "microphone" as PermissionName,
           });
-          setMicPermission(result.state as MicPermission);
+          const state = result.state as MicPermission;
+          setMicPermission(state);
+          cachedMicPermission = state;
+
           result.onchange = () => {
-            setMicPermission(result.state as MicPermission);
-            if (result.state === "granted") setShowFallback(false);
+            const newState = result.state as MicPermission;
+            setMicPermission(newState);
+            cachedMicPermission = newState;
+            if (newState === "granted") {
+              setShowSettingsHint(false);
+              setRetryCount(0);
+            }
           };
         }
       } catch {
@@ -62,15 +87,36 @@ export default function VoiceInput({
   }, []);
 
   const requestMicPermission = useCallback(async (): Promise<boolean> => {
+    // First, re-check via Permissions API — the user may have changed site settings
+    try {
+      if (navigator.permissions) {
+        const result = await navigator.permissions.query({
+          name: "microphone" as PermissionName,
+        });
+        if (result.state === "granted") {
+          setMicPermission("granted");
+          cachedMicPermission = "granted";
+          setShowSettingsHint(false);
+          setRetryCount(0);
+          return true;
+        }
+      }
+    } catch {
+      // Not supported — fall through to getUserMedia
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => track.stop());
       setMicPermission("granted");
-      setShowFallback(false);
+      cachedMicPermission = "granted";
+      setShowSettingsHint(false);
+      setRetryCount(0);
       return true;
     } catch (err) {
       console.error("Mic permission denied:", err);
       setMicPermission("denied");
+      cachedMicPermission = "denied";
       return false;
     }
   }, []);
@@ -139,6 +185,7 @@ export default function VoiceInput({
       console.error("Speech recognition error:", event.error);
       if (event.error === "not-allowed") {
         setMicPermission("denied");
+        cachedMicPermission = "denied";
         setIsListening(false);
         return;
       }
@@ -174,7 +221,12 @@ export default function VoiceInput({
   const handleRetryPermission = useCallback(async () => {
     const granted = await requestMicPermission();
     if (!granted) {
-      setShowFallback(true);
+      // After first failed retry, show settings instructions
+      setRetryCount((prev) => {
+        const next = prev + 1;
+        if (next >= 1) setShowSettingsHint(true);
+        return next;
+      });
     }
   }, [requestMicPermission]);
 
@@ -204,49 +256,10 @@ export default function VoiceInput({
     );
   }
 
-  // Permission denied — show re-request UI
-  if (micPermission === "denied" && !showFallback) {
+  // Permission denied — show text fallback with option to re-enable mic
+  if (micPermission === "denied") {
     return (
-      <div className="flex flex-col items-center gap-3 animate-fade-in">
-        <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center">
-          <svg className="w-7 h-7 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4M12 15a3 3 0 003-3V5a3 3 0 00-6 0v7a3 3 0 003 3z"
-            />
-            <line x1="4" y1="4" x2="20" y2="20" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
-          </svg>
-        </div>
-        <p className="text-sm text-gray-600 text-center max-w-xs">
-          Microphone access is needed to hear your answer.
-        </p>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleRetryPermission}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-sm font-medium hover:from-violet-700 hover:to-indigo-700 transition-all shadow-md active:scale-95"
-          >
-            Allow Microphone
-          </button>
-          <button
-            onClick={() => setShowFallback(true)}
-            className="px-5 py-2.5 rounded-xl border border-gray-300 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-all active:scale-95"
-          >
-            Type Instead
-          </button>
-        </div>
-        <p className="text-xs text-gray-400 text-center">
-          If the prompt doesn&apos;t appear, check your browser&apos;s site settings
-        </p>
-      </div>
-    );
-  }
-
-  // Permission denied + user chose fallback
-  if (showFallback) {
-    return (
-      <div className="animate-fade-in">
+      <div className="flex flex-col gap-3 animate-fade-in">
         <TextFallback
           value={fallbackText}
           onChange={setFallbackText}
@@ -254,12 +267,34 @@ export default function VoiceInput({
           disabled={disabled}
           placeholder={placeholder}
         />
-        <button
-          onClick={handleRetryPermission}
-          className="mt-2 mx-auto block text-xs text-violet-600 hover:text-violet-700 underline"
-        >
-          Try microphone again
-        </button>
+        <div className="flex flex-col items-center gap-2">
+          <button
+            onClick={handleRetryPermission}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-xs font-medium hover:from-violet-700 hover:to-indigo-700 transition-all shadow-md active:scale-95"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4M12 15a3 3 0 003-3V5a3 3 0 00-6 0v7a3 3 0 003 3z"
+              />
+            </svg>
+            Enable Microphone
+          </button>
+          {showSettingsHint && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 max-w-xs text-center animate-fade-in">
+              <p className="text-xs text-amber-800 font-medium mb-1">
+                Browser is blocking the microphone
+              </p>
+              <p className="text-xs text-amber-700 leading-relaxed">
+                Tap the lock/info icon in your browser&apos;s address bar, find
+                &quot;Microphone&quot;, and change it to &quot;Allow&quot;. Then
+                tap &quot;Enable Microphone&quot; above.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
