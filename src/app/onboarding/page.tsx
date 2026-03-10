@@ -155,21 +155,21 @@ export default function OnboardingPage() {
   const showInput = !isComplete && !isTyping && step && messages.length >= 2;
 
   let chipOptions: string[] | undefined;
-  let showTextInput = false;
-  let textPlaceholder = "";
+  let showVoiceInput = false;
+  let voicePlaceholder = "";
 
   if (showInput && step) {
     if (step.inputMode === "chips") {
       chipOptions = step.options;
     } else if (step.inputMode === "text") {
-      showTextInput = true;
-      textPlaceholder = step.textPlaceholder ?? "Type your answer...";
+      showVoiceInput = true;
+      voicePlaceholder = step.textPlaceholder ?? "Tap the mic and speak...";
     } else if (step.inputMode === "chips-then-text") {
       if (subPhase === "chips") {
         chipOptions = step.options;
       } else {
-        showTextInput = true;
-        textPlaceholder = step.followUpPlaceholder ?? "Type here...";
+        showVoiceInput = true;
+        voicePlaceholder = step.followUpPlaceholder ?? "Tap the mic and speak...";
       }
     }
   }
@@ -227,8 +227,8 @@ export default function OnboardingPage() {
               options={chipOptions}
               onSelect={handleSelect}
               disabled={isTyping}
-              showTextInput={showTextInput}
-              textPlaceholder={textPlaceholder}
+              showVoiceInput={showVoiceInput}
+              voicePlaceholder={voicePlaceholder}
             />
           ) : isComplete ? (
             <p className="text-center text-sm text-gray-400 py-3">
