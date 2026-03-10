@@ -23,6 +23,8 @@ function getSpeechRecognition(): SpeechRecognitionAny {
   return W.SpeechRecognition || W.webkitSpeechRecognition || null;
 }
 
+type PermissionState = "prompt" | "granted" | "denied" | "checking";
+
 export default function VoiceInput({
   onResult,
   disabled,
@@ -32,13 +34,62 @@ export default function VoiceInput({
   const [transcript, setTranscript] = useState("");
   const [interimTranscript, setInterimTranscript] = useState("");
   const [isSupported, setIsSupported] = useState(true);
+  const [micPermission, setMicPermission] = useState<PermissionState>("checking");
   const [fallbackText, setFallbackText] = useState("");
+  const [showFallback, setShowFallback] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionAny>(null);
   const hasSubmittedRef = useRef(false);
 
+  // Check speech recognition support
   useEffect(() => {
     setIsSupported(getSpeechRecognition() !== null);
   }, []);
+
+  // Check microphone permission on mount
+  useEffect(() => {
+    checkMicPermission();
+  }, []);
+
+  const checkMicPermission = async () => {
+    // navigator.permissions.query for "microphone" — not supported in all browsers
+    // but we use it when available, and fall back to "prompt" otherwise
+    try {
+      if (navigator.permissions) {
+        const result = await navigator.permissions.query({
+          name: "microphone" as PermissionName,
+        });
+        setMicPermission(result.state as PermissionState);
+
+        // Listen for permission changes (e.g. user changes in browser settings)
+        result.onchange = () => {
+          setMicPermission(result.state as PermissionState);
+          if (result.state === "granted") {
+            setShowFallback(false);
+          }
+        };
+        return;
+      }
+    } catch {
+      // permissions.query("microphone") not supported (e.g. Safari)
+    }
+    // Default to "prompt" — we'll find out the real state when they tap the mic
+    setMicPermission("prompt");
+  };
+
+  const requestMicPermission = async (): Promise<boolean> => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Got permission — stop the stream immediately, we just needed the grant
+      stream.getTracks().forEach((track) => track.stop());
+      setMicPermission("granted");
+      setShowFallback(false);
+      return true;
+    } catch (err) {
+      console.error("Mic permission denied:", err);
+      setMicPermission("denied");
+      return false;
+    }
+  };
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
@@ -49,9 +100,15 @@ export default function VoiceInput({
     setInterimTranscript("");
   }, []);
 
-  const startListening = useCallback(() => {
+  const startListening = useCallback(async () => {
     const SpeechRecognitionClass = getSpeechRecognition();
     if (!SpeechRecognitionClass) return;
+
+    // If permission is not yet granted, request it first
+    if (micPermission !== "granted") {
+      const granted = await requestMicPermission();
+      if (!granted) return;
+    }
 
     // Stop any existing instance
     if (recognitionRef.current) {
@@ -99,6 +156,13 @@ export default function VoiceInput({
     recognition.onerror = (event: any) => {
       console.error("Speech recognition error:", event.error);
 
+      if (event.error === "not-allowed") {
+        // Permission was denied at the browser level
+        setMicPermission("denied");
+        setIsListening(false);
+        return;
+      }
+
       // On mobile, "no-speech" is common — don't treat as fatal
       if (event.error !== "no-speech" && event.error !== "aborted") {
         setIsListening(false);
@@ -111,7 +175,8 @@ export default function VoiceInput({
     };
 
     recognition.start();
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micPermission]);
 
   const handleSubmit = useCallback(() => {
     if (hasSubmittedRef.current) return;
@@ -124,6 +189,17 @@ export default function VoiceInput({
     }
   }, [transcript, disabled, stopListening, onResult]);
 
+  const handleRetryPermission = async () => {
+    const granted = await requestMicPermission();
+    if (granted) {
+      setMicPermission("granted");
+      setShowFallback(false);
+    } else {
+      // Still denied — show text fallback
+      setShowFallback(true);
+    }
+  };
+
   const handleFallbackSubmit = () => {
     const trimmed = fallbackText.trim();
     if (trimmed && !disabled) {
@@ -135,30 +211,72 @@ export default function VoiceInput({
   // Fallback text input for unsupported browsers
   if (!isSupported) {
     return (
-      <div className="flex items-center gap-2">
-        <input
-          type="text"
+      <TextFallback
+        value={fallbackText}
+        onChange={setFallbackText}
+        onSubmit={handleFallbackSubmit}
+        disabled={disabled}
+        placeholder={placeholder}
+      />
+    );
+  }
+
+  // Permission denied state — show re-request UI
+  if (micPermission === "denied" && !showFallback) {
+    return (
+      <div className="flex flex-col items-center gap-3 animate-fade-in">
+        <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center">
+          <svg className="w-7 h-7 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4M12 15a3 3 0 003-3V5a3 3 0 00-6 0v7a3 3 0 003 3z"
+            />
+            {/* Slash across mic */}
+            <line x1="4" y1="4" x2="20" y2="20" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
+          </svg>
+        </div>
+        <p className="text-sm text-gray-600 text-center max-w-xs">
+          Microphone access is needed to hear your answer.
+        </p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRetryPermission}
+            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-sm font-medium hover:from-violet-700 hover:to-indigo-700 transition-all shadow-md active:scale-95"
+          >
+            Allow Microphone
+          </button>
+          <button
+            onClick={() => setShowFallback(true)}
+            className="px-5 py-2.5 rounded-xl border border-gray-300 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-all active:scale-95"
+          >
+            Type Instead
+          </button>
+        </div>
+        <p className="text-xs text-gray-400 text-center">
+          If the prompt doesn&apos;t appear, check your browser&apos;s site settings
+        </p>
+      </div>
+    );
+  }
+
+  // Permission denied + user chose fallback
+  if (showFallback) {
+    return (
+      <div className="animate-fade-in">
+        <TextFallback
           value={fallbackText}
-          onChange={(e) => setFallbackText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              handleFallbackSubmit();
-            }
-          }}
+          onChange={setFallbackText}
+          onSubmit={handleFallbackSubmit}
           disabled={disabled}
           placeholder={placeholder}
-          className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 bg-gray-50 text-sm text-gray-800 placeholder-gray-400 focus:border-violet-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/20 disabled:opacity-50 transition-all"
-          autoFocus
         />
         <button
-          onClick={handleFallbackSubmit}
-          disabled={disabled || !fallbackText.trim()}
-          className="flex-shrink-0 w-10 h-10 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md active:scale-95"
+          onClick={handleRetryPermission}
+          className="mt-2 mx-auto block text-xs text-violet-600 hover:text-violet-700 underline"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-          </svg>
+          Try microphone again
         </button>
       </div>
     );
@@ -234,6 +352,50 @@ export default function VoiceInput({
       <p className="text-xs text-gray-400">
         {isListening ? "Listening... tap to stop" : "Tap the mic to speak"}
       </p>
+    </div>
+  );
+}
+
+/** Reusable text fallback input */
+function TextFallback({
+  value,
+  onChange,
+  onSubmit,
+  disabled,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  disabled: boolean;
+  placeholder: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onSubmit();
+          }
+        }}
+        disabled={disabled}
+        placeholder={placeholder}
+        className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 bg-gray-50 text-sm text-gray-800 placeholder-gray-400 focus:border-violet-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/20 disabled:opacity-50 transition-all"
+        autoFocus
+      />
+      <button
+        onClick={onSubmit}
+        disabled={disabled || !value.trim()}
+        className="flex-shrink-0 w-10 h-10 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md active:scale-95"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+        </svg>
+      </button>
     </div>
   );
 }
